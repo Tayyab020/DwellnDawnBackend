@@ -4,7 +4,6 @@ const favController = {
   // Add or remove favorite (toggle functionality)
   async toggleFavorite(req, res) {
     try {
-      console.log('nikalooooooooo dalooooooooooo')
       const { itemId, userId, isLiked } = req.body;
 console.log('Received toggleFavorite request:', { itemId, userId, isLiked });
       if (!itemId || !userId || typeof isLiked !== 'boolean') {

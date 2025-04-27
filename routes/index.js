@@ -118,7 +118,7 @@ router.get("/blogs/author/:authorId", blogController.getByAuthor);
 router.put('/blog',auth, blogController.update);
 
 // delete
-router.delete('/blog/:id', auth, blogController.delete);
+router.delete('/blog/:id', blogController.delete);
 
 
 

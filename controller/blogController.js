@@ -12,6 +12,7 @@ const BlogDetailsDTO = require("../dto/blog-details");
 const Appointment = require('../models/appointment');
 const AppointmentDTO = require('../dto/appointment');
 const Comment = require("../models/comment");
+const Favorite=require('../models/favorites')
 const path = require('path'); 
 const { type } = require("os");
 const cloudinary = require("cloudinary").v2;
@@ -242,31 +243,40 @@ console.log('no error ')
 
     return res.status(200).json({ message: "blog updated!" });
   },
-  async delete(req, res, next) {
-    // validate id
-    // delete blog
-    // delete comments on this blog
+async delete(req, res, next) {
+  const deleteBlogSchema = Joi.object({
+    id: Joi.string().regex(mongodbIdPattern).required(),
+  });
 
-    const deleteBlogSchema = Joi.object({
-      id: Joi.string().regex(mongodbIdPattern).required(),
-    });
+  const { error } = deleteBlogSchema.validate(req.params);
+  if (error) {
+    return next(error);
+  }
 
-    const { error } = deleteBlogSchema.validate(req.params);
+  const { id } = req.params;
 
-    const { id } = req.params;
+  try {
+    // Delete the blog
+    await Blog.deleteOne({ _id: id });
 
-    // delete blog
-    // delete comments
-    try {
-      await Blog.deleteOne({ _id: id });
+    // Delete all comments related to this blog
+    await Comment.deleteMany({ blog: id });
 
-      await Comment.deleteMany({ blog: id });
-    } catch (error) {
-      return next(error);
-    }
+    // Remove the blog from all users' favorites
+    await Favorite.updateMany(
+      { "items.itemId": id }, // Find favorites that contain this blog
+      { $pull: { items: { itemId: id } } } // Pull (remove) that item from items array
+    );
 
-    return res.status(200).json({ message: "blog deleted" });
-  },
+  } catch (error) {
+    return next(error);
+  }
+
+  return res.status(200).json({ message: "Blog deleted and removed from favorites" });
+}
+
+
+
 };
 
 module.exports = blogController;
