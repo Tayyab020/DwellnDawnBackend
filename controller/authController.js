@@ -5,7 +5,8 @@ const UserDTO = require("../dto/user");
 const JWTService = require("../services/JWTService");
 const RefreshToken = require("../models/token");
 const cloudinary = require('cloudinary').v2;
-
+ const streamifier = require('streamifier');
+const Blog=require('../models/blog')
 const passwordPattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d]{8,25}$/;
 
 const authController = {
@@ -20,7 +21,7 @@ const authController = {
       email: Joi.string().email().required(),
       password: Joi.string().pattern(passwordPattern).required(),
       confirmPassword: Joi.ref("password"),
-      role: Joi.string().valid("student","provider", "admin"),
+      role: Joi.string().valid("buyer","provider", "admin"),
      
     });
     const { error } = userRegisterSchema.validate(req.body);
@@ -221,6 +222,59 @@ console.log(req.body)
     // 2. response
     res.status(200).json({ user: null, auth: false });
   },
+  async getUserById(req, res, next) {
+    try {
+      const userId = req.params.id;
+      console.log('Fetching user by ID:', userId);
+
+      // Optional: validate ObjectId if using MongoDB
+      // const isValidId = mongoose.Types.ObjectId.isValid(userId);
+      // if (!isValidId) return res.status(400).json({ message: 'Invalid user ID' });
+
+      const user = await User.findById(userId).select('-password'); // Exclude password field
+
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
+      res.status(200).json(user);
+    } catch (error) {
+      console.error('Error fetching user by ID:', error);
+      next(error); // pass to error handler middleware
+    }
+  },
+ async block(req, res, next) {
+  try {
+    console.log('blo');
+    const post = await Blog.findByIdAndUpdate(
+      req.params.id,
+      { isBlocked: true },
+      { new: true }
+    );
+    console.log('post', post);
+    
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    
+    res.json({ message: "Post blocked", post });
+  } catch (err) {
+    console.error("Block error:", err); // Better debug
+    res.status(500).json({ message: "Error blocking post" });
+  }
+},
+
+  async getAllUser(req, res, next) {
+    try {
+    //   console.log('gettinggggg')
+    // if (req.user.role !== 'admin') {
+    //   return res.status(403).json({ message: 'Access denied' });
+    // }
+
+    const users = await User.find().select('-password');
+    res.json({ users });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+  },
   async refresh(req, res, next) {
     // 1. get refreshToken from cookies
     // 2. verify refreshToken
@@ -286,34 +340,110 @@ console.log(req.body)
 
     return res.status(200).json({ user: userDto, auth: true });
   },
-  async updateProfileImage(req, res, next) {
-    console.log('Updating profile image');
-    const { id } = req.params;
-    console.log(id);
-
-    const { profileImage } = req.body;
-    //console.log(profileImage);
-    const schema = Joi.object({
-        profileImage: Joi.string().required(),
-    });
-
-    const { error } = schema.validate(req.body);
-    if (error) {
-        return next(error);
+// Enhanced with proper error handling and status codes
+async updateUser(req, res, next) {
+  try {console.log('updating')
+    const userId = req.params.id;
+    const { name, phone, email, profileImage, location } = req.body;
+    
+    // Validate required fields
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
     }
 
-    try {
-        const uploadResult = await cloudinary.uploader.upload(profileImage, { folder: 'profile_images' });
-        const photoUrl = uploadResult.secure_url;
+    // Build update object
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (phone) updateData.phone = phone;
+    if (email) updateData.email = email;
+    if (profileImage) updateData.profileImage = profileImage;
+    
+    // Handle location update
+    if (location) {
+      if (!location.coordinates || location.coordinates.length !== 2) {
+        return res.status(400).json({ error: 'Invalid location format' });
+      }
+      
+      updateData.location = {
+        type: 'Point',
+        coordinates: [
+          parseFloat(location.coordinates[0]), // longitude
+          parseFloat(location.coordinates[1])  // latitude
+        ]
+      };
+    }
 
-        await User.updateOne({ _id: id }, { profileImage: photoUrl });
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      updateData,
+      { new: true, runValidators: true }
+    );
 
-        const user = await User.findOne({ _id: id });
-        const userDto = new UserDTO(user);
+    if (!updatedUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-        return res.status(200).json({ user: userDto, auth: true });
-    } catch (error) {
-        return next(error);
+    res.json({
+      success: true,
+      message: 'Location updated successfully',
+      user: updatedUser
+    });
+    
+  } catch (error) {
+    console.error('Update error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error',
+      details: error.message 
+    });
+  }
+},
+  async updateProfileImage(req, res, next) {
+  console.log('Updating profile image');
+  const { id } = req.params;
+  console.log(id);
+
+  const schema = Joi.object({
+    // No need to validate base64 now, but you can validate req.file if needed
+  });
+
+  const { error } = schema.validate({});
+  if (error) {
+    return next(error);
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ message: 'No file uploaded' });
+  }
+
+  try {
+    const streamUpload = (req) => {
+      return new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder: 'profile_images' },
+          (error, result) => {
+            if (result) {
+              resolve(result);
+            } else {
+              reject(error);
+            }
+          }
+        );
+        streamifier.createReadStream(req.file.buffer).pipe(stream);
+      });
+    };
+
+    const uploadResult = await streamUpload(req);
+    const photoUrl = uploadResult.secure_url;
+
+    await User.updateOne({ _id: id }, { profileImage: photoUrl });
+
+    const user = await User.findOne({ _id: id });
+    const userDto = new UserDTO(user);
+
+    return res.status(200).json({ user: userDto, auth: true });
+  } catch (error) {
+    return next(error);
     }
   },
   async getProfileImage(req, res, next) {

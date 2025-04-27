@@ -8,6 +8,10 @@ const blogSchema = new Schema({
   author: { type: mongoose.SchemaTypes.ObjectId, ref: 'User' },
   authorPhotoPath: {},
   type: { type: String, enum: ['food', 'rental'], required: true },
+   isBlocked: {
+    type: Boolean,
+    default: false,
+  },
   price: { type: Number, required: true }, // Add price field
 }, 
 { timestamps: true });

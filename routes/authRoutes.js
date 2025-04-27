@@ -4,16 +4,22 @@ const authMiddleware = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-router.get('/home', authController.home);
+// Basic routes
 router.post('/register', authController.register);
 router.post('/login', authController.login);
-router.post('/google-auth', authController.googleAuth);
-router.post('/facebook-auth', authController.facebookAuth);
+
+// Social auth routes - these should be GET, not POST
+router.get('/auth/google', authController.googleAuth);
+router.get('/auth/google/callback', authController.googleAuthCallback);
+router.get('/auth/facebook', authController.facebookAuth);
+router.get('/auth/facebook/callback', authController.facebookAuthCallback);
 
 // Protected route example
 router.get('/protected-route', authMiddleware, (req, res) => {
-  // Your logic for the protected route
-  res.json({message: 'This is a protected route.'});
+  res.json({ message: 'This is a protected route.' });
 });
+
+// Logout route (you might want to add this)
+router.post('/logout', authController.logout);
 
 module.exports = router;

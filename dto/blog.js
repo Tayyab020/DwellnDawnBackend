@@ -9,6 +9,7 @@ class BlogDTO {
     this.price = blog.price; // Add this line
     this.username = blog.author.username; // This should correctly access the populated username
     this.authorPhotoPath = blog.author.profileImage; // Add this line
+    this.isBlocked=blog.isBlocked
   }
 }
   module.exports = BlogDTO;

@@ -9,8 +9,19 @@ const userSchema = new Schema({
   email: { type: String, required: true },
   password: { type: String, required: true },
   profileImage: { type: String },
-  role: { type: String, enum: ['admin', 'provider','student'] },
-  location: { type: String } // Initially null, can be updated later
+  role: { type: String, enum: ['admin', 'provider','buyer'] },
+  location: {
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point'
+    },
+    coordinates: {
+      type: [Number],  // [longitude, latitude]
+      index: '2dsphere'  // Create geospatial index
+    }
+  },
+  designation: { type: String }, // Optional field for designation
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema, 'users');

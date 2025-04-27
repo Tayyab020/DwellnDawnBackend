@@ -41,7 +41,7 @@ const blogController = {
 
   const { error } = createBlogSchema.validate(req.body);
   if (error) return next(error);
-
+console.log('no error ')
   const { title, author, content, type, price } = req.body;
   const file = req.file;
 
@@ -51,11 +51,15 @@ const blogController = {
 
   let photoUrl;
 
-  try {
+    try {
+    console.log('inside try')
     // Upload buffer using cloudinary upload_stream
     const result = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { folder: 'blog_photos' },
+        {
+      folder: 'post_photos',     // You can change the folder name if needed
+      resource_type: 'auto',    // 👈 this is important for videos
+    },
         (error, result) => {
           if (error) return reject(error);
           resolve(result);
@@ -64,13 +68,15 @@ const blogController = {
       stream.end(file.buffer); // send the buffer here
     });
 
-    photoUrl = result.secure_url;
+      photoUrl = result.secure_url;
+      console.log('photoUrl:', photoUrl);
   } catch (cloudinaryError) {
     console.error('Cloudinary Upload Error:', cloudinaryError);
     return res.status(500).json({ error: 'Failed to upload photo to Cloudinary' });
   }
 
-  try {
+    try {
+    console.log('inside try 2')
     const newBlog = new Blog({
       title,
       author,
@@ -88,8 +94,45 @@ const blogController = {
   } catch (dbError) {
     return res.status(500).json({ error: 'Failed to save blog to database' });
   }
-},
+  },
+  async getByAuthor(req, res, next) {
+    console.log("getByAuthor called");
 
+  const getByAuthorSchema = Joi.object({
+    authorId: Joi.string().regex(mongodbIdPattern).required(),
+  });
+
+  const { error } = getByAuthorSchema.validate(req.params);
+
+  if (error) {
+    return next(error);
+  }
+
+  const { authorId } = req.params;
+
+  let blogs;
+
+  try {
+    blogs = await Blog.find({ author: authorId }).populate("author", "name profileImage");
+  } catch (err) {
+    return next(err);
+  }
+
+  const blogDtos = blogs.map((blog) => new BlogDTO(blog)); // Match structure with getAll
+
+  return res.status(200).json({ blogs: blogDtos });
+  },
+  async searchByName(req, res, next) { 
+    const title = req.query.title;
+  try {
+    const blogs = await Blog.find({
+      title: { $regex: new RegExp(title, 'i') } // case-insensitive
+    });
+    res.json(blogs);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+  },
   async getAll(req, res, next) {
     try {
       const blogs = await Blog.find({}).populate('author', 'name profileImage');
