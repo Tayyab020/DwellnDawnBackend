@@ -9,7 +9,8 @@ const userSchema = new Schema({
   email: { type: String, required: true },
   password: { type: String, required: true },
   profileImage: { type: String },
-  role: { type: String, enum: ['admin', 'provider','buyer'] },
+  role: { type: String, enum: ['admin', 'provider', 'buyer'] },
+   isVerified: { type: Boolean, default: false },
   location: {
     type: {
       type: String,

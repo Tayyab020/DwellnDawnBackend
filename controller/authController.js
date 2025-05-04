@@ -8,220 +8,343 @@ const cloudinary = require('cloudinary').v2;
  const streamifier = require('streamifier');
 const Blog=require('../models/blog')
 const passwordPattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d]{8,25}$/;
-
+const sendEmail = require('../utills/sendEmail');
+const OTP = require('../models/otp');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const FacebookStrategy = require('passport-facebook').Strategy;
 const authController = {
 
-  async register(req, res, next) {
-    console.log(req.body);
-    // 1. validate user input
-    const userRegisterSchema = Joi.object({
-      // username: Joi.string().min(5).max(30).required(),
-      name: Joi.string().max(30).required(),
-      phone: Joi.string().required(),
-      email: Joi.string().email().required(),
-      password: Joi.string().pattern(passwordPattern).required(),
-      confirmPassword: Joi.ref("password"),
-      role: Joi.string().valid("buyer","provider", "admin"),
-     
+  async  requestOtp(req, res) {
+  const schema = Joi.object({
+    email: Joi.string().email().required(),
+  });
+
+  const { error } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ success: false, message: "Invalid email format." });
+  }
+
+  const { email } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+
+    
+
+    // Clean any existing unverified OTP
+    await OTP.deleteOne({ email });
+
+    // Generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiry = Date.now() + 10 * 60 * 1000;
+
+    const otpRecord = new OTP({
+      email,
+      otp,
+      otpExpiry,
+      isVerified: false,
     });
-    const { error } = userRegisterSchema.validate(req.body);
 
-    // 2. if error in validation -> return error via middleware
-    if (error) {
-      return next(error);
-    }
+    await otpRecord.save();
 
-    // 3. if email or username is already registered -> return an error
-    const { name,phone, email, password,role} = req.body;
+    const emailBody = `Your OTP is: ${otp}. It will expire in 10 minutes.`;
+    await sendEmail(email, 'Your OTP Code', emailBody);
 
-    try {
-      const emailInUse = await User.exists({ email });
+    return res.status(200).json({
+      success: true,
+      message: 'OTP sent to your email. Please verify to continue.',
+    });
 
-      // const usernameInUse = await User.exists({ username });
-      
-      const usernameInUse = await User.exists({ name});
+  } catch (err) {
+    console.error("Error sending OTP:", err);
+    return res.status(500).json({ success: false, message: "Server error. Please try again." });
+  }
+},
 
-      if (emailInUse) {
-        const error = {
-          status: 409,
-          message: "Email already registered, use another email!",
-        };
+// Register user and send OTP
+async  register(req, res, next) {
+  console.log('Registering...');
 
-        return next(error);
+  // 1. Validate input
+  const registerSchema = Joi.object({
+    email: Joi.string().email().required(),
+    name: Joi.string().required(),
+    phone: Joi.string().min(10).required(),
+    password: Joi.string().min(6).max(30).required(),
+    confirmPassword: Joi.ref('password'),
+    role: Joi.string().valid('provider', 'buyer', 'admin').default('buyer'),
+  });
+
+  const { error } = registerSchema.validate(req.body);
+  if (error) return next(error);
+
+  const { email, name, phone, password, role } = req.body;
+
+  let otpRecord = null;
+  let user = null;
+
+  try {
+    // 2. Check if the user is already registered
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      if (existingUser.isVerified) {
+        // If the user is already verified
+        return res.status(409).json({ message: 'Email already registered and verified.' });
+      } else {
+        // If the user is registered but not verified, send a new OTP
+        console.log('User exists but not verified. Sending new OTP...');
+        
+        // Clean up any existing OTP records if the old one expired or is unverified
+        await OTP.deleteOne({ email });
+
+        // 3. Generate new OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpExpiry = Date.now() + 10 * 60 * 1000; // OTP valid for 10 minutes
+
+        // 4. Save OTP (new one)
+        otpRecord = new OTP({
+          email,
+          otp,
+          otpExpiry,
+          isVerified: false,
+        });
+
+        await otpRecord.save(); // Save OTP to DB
+
+        // 5. Send OTP email
+        const emailBody = `Your OTP is: ${otp}. It will expire in 10 minutes.`;
+        await sendEmail(email, 'Your Registration OTP', emailBody);
+
+        console.log('OTP email sent to:', email);
+
+        // 6. Return response
+        return res.status(200).json({
+          message: 'OTP sent to your email. Please verify to complete registration.',
+        });
       }
+    } else {
+      // 7. If the user does not exist, proceed with normal registration
+      console.log('No existing user found. Proceeding with new registration...');
 
-      if (usernameInUse) {
-        const error = {
-          status: 409,
-          message: "Name not available, choose another Name!",
-        };
+      // 8. Hash password
+      const hashedPassword = await bcrypt.hash(password, 10);
 
-        return next(error);
-      }
-    } catch (error) {
-      return next(error);
-    }
+      // 9. Generate OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpExpiry = Date.now() + 10 * 60 * 1000; // OTP valid for 10 minutes
 
-    // 4. password hash
-    const hashedPassword = await bcrypt.hash(password, 10);
+      // 10. Save OTP (new one)
+      otpRecord = new OTP({
+        email,
+        otp,
+        otpExpiry,
+        isVerified: false,
+      });
 
-    // 5. store user data in db
-    let accessToken;
-    let refreshToken;
-    let user;
+      await otpRecord.save(); // Save OTP to DB
 
-
-    try {
-      const userToRegister = new User({
-        // username,
+      // 11. Save user with isVerified = false
+      user = new User({
         email,
         name,
         phone,
         password: hashedPassword,
-        role
+        role,
+        isVerified: false,
       });
 
-      user = await userToRegister.save();
+      await user.save(); // Save user to DB
 
-      // token generation
+      // 12. Send OTP email
+      const emailBody = `Your OTP is: ${otp}. It will expire in 10 minutes.`;
+      await sendEmail(email, 'Your Registration OTP', emailBody);
 
-      accessToken = JWTService.signAccessToken({ _id: user._id }, "300000m");
-      refreshToken = JWTService.signRefreshToken({ _id: user._id }, "600000m");
+      console.log('OTP email sent to:', email);
 
-      // res.status(200).json(
-      //   {
-      //     message:"User created Successfully"
-      //   }
-      // )
+      // 13. Return response
+      return res.status(200).json({
+        message: 'OTP sent to your email. Please verify to complete registration.',
+      });
+    }
+  } catch (err) {
+    console.error('Error during registration:', err);
 
-    } 
-    catch (error) {
-      return next(error);
+    // If OTP email failed, clean up the DB (rollback user and OTP)
+    if (otpRecord) {
+      console.log('Rolling back OTP record...');
+      await OTP.deleteOne({ email }); // Delete the OTP record from DB
     }
 
-    // store refresh token in db
-    await JWTService.storeRefreshToken(refreshToken, user._id);
-
-    // send tokens in cookie
-    res.cookie("accessToken", accessToken, {
-      maxAge: 1000 * 60 * 60 * 24,
-      httpOnly: true,
-    });
-
-    res.cookie("refreshToken", refreshToken, {
-      maxAge: 1000 * 60 * 60 * 24,
-      httpOnly: true,
-    });
-
-    // // 6. response send
-
-    const userDto = new UserDTO(user);
-
-    return res.status(200).json({ user: userDto, auth: true });
-  },
-  async login(req, res, next) {
-    // 1. validate user input
-    // 2. if validation error, return error
-    // 3. match username and password
-    // 4. return response
-
-    // we expect input data to be in such shape
-    
-    const userLoginSchema = Joi.object({
-      email: Joi.string().email().required(),
-      password: Joi.string().pattern(passwordPattern),
-    });
-
-    const { error } = userLoginSchema.validate(req.body);
-
-    if (error) {
-      return next(error);
-    }
-console.log(req.body)
-    const { email, password } = req.body;
-
-    // const username = req.body.username
-    // const password = req.body.password
-
-    let user;
-
-    try {
-      // match username
-      user = await User.findOne({ email: email });
-
-      if (!user) {
-        const error = {
-          status: 401,
-          message: "Invalid email or user not found",
-        };
-
-        return next(error);
-      }
-
-      // match password
-      // req.body.password -> hash -> match
-
-      const match = await bcrypt.compare(password, user.password);
-
-      if (!match) {
-        const error = {
-          status: 401,
-          message: "Invalid password",
-        };
-
-        return next(error);
-      }
-    } catch (error) {
-      return next(error);
+    if (user) {
+      console.log('Rolling back user...');
+      await User.deleteOne({ email }); // Delete the user record from DB
     }
 
+    return next(err); // Propagate error for proper response
+  }
+},
+
+// Login user (only verified users can login)
+async login(req, res, next) {
+  // 1. Validate user input
+  const userLoginSchema = Joi.object({
+    email: Joi.string().email().required(),
+    password: Joi.string().pattern(passwordPattern),
+  });
+
+  const { error } = userLoginSchema.validate(req.body);
+  if (error) return next(error);
+
+  const { email, password } = req.body;
+
+  let user;
+
+  try {
+    // 2. Find user by email
+    user = await User.findOne({ email });
+    if (!user) {
+      return next({
+        status: 401,
+        message: "Invalid email or user not found",
+      });
+    }
+
+    // 3. Check if the user is verified
+    if (!user.isVerified) {
+      return next({
+        status: 401,
+        message: "Account is not verified. Please verify your email to login.",
+      });
+    }
+
+    // 4. Match password
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return next({
+        status: 401,
+        message: "Invalid password",
+      });
+    }
+
+    // 5. Generate tokens
     const accessToken = JWTService.signAccessToken({ _id: user._id }, "300000m");
     const refreshToken = JWTService.signRefreshToken({ _id: user._id }, "600000m");
 
-    // update refresh token in database
-    try {
-      await RefreshToken.updateOne(
-        {
-          _id: user._id,
-        },
-        { token: refreshToken },
-        { upsert: true }
-      );
-    } catch (error) {
-      return next(error);
-    }
+    // 6. Update refresh token in database
+    await RefreshToken.updateOne(
+      { _id: user._id },
+      { token: refreshToken },
+      { upsert: true }
+    );
 
+    // 7. Send tokens in cookies
     res.cookie("accessToken", accessToken, {
       maxAge: 1000 * 60 * 60 * 24 * 30,
       httpOnly: true,
     });
-
     res.cookie("refreshToken", refreshToken, {
       maxAge: 1000 * 60 * 60 * 24 * 30,
       httpOnly: true,
     });
 
     const userDto = new UserDTO(user);
-    console.log('response', user);
     return res.status(200).json({ user: userDto, auth: true });
-  },
-  async logout(req, res, next) {
-    // 1. delete refresh token from db
-    const { refreshToken } = req.cookies;
+  } catch (error) {
+    return next(error);
+  }
+},
 
-    try {
-      await RefreshToken.deleteOne({ token: refreshToken });
-    } catch (error) {
-      return next(error);
+// Verify OTP and set isVerified to true
+async verifyOtp(req, res, next) {
+  try {
+    console.log('Verifying OTP...');
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({ message: 'Email and OTP are required.' });
     }
 
-    // delete cookies
-    res.clearCookie("accessToken");
-    res.clearCookie("refreshToken");
+    // Find user
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
 
-    // 2. response
-    res.status(200).json({ user: null, auth: false });
-  },
+    // Find OTP record
+    const otpRecord = await OTP.findOne({ otp, isVerified: false });
+    if (!otpRecord || otpRecord.otpExpiry < Date.now()) {
+      return res.status(400).json({ message: 'Invalid or expired OTP.' });
+    }
+
+    // Mark user as verified
+    user.isVerified = true;
+    await user.save();
+
+    // Delete OTP record after successful verification
+    await OTP.deleteOne({ _id: otpRecord._id });
+
+    // Generate tokens
+    const accessToken = JWTService.signAccessToken({ _id: user._id }, '300000m');
+    const refreshToken = JWTService.signRefreshToken({ _id: user._id }, '600000m');
+    await JWTService.storeRefreshToken(refreshToken, user._id);
+
+    // Set cookies
+    res.cookie('accessToken', accessToken, { maxAge: 86400000, httpOnly: true });
+    res.cookie('refreshToken', refreshToken, { maxAge: 86400000, httpOnly: true });
+
+    // Send response
+    const userDto = new UserDTO(user);
+    return res.status(200).json({ user: userDto, auth: true });
+
+  } catch (err) {
+    return next(err);
+  }
+}
+,
+
+// Reset password (user must verify OTP first)
+async resetPassword(req, res, next) {
+  const { email, otp, newPassword } = req.body;
+  const user = await User.findOne({ email });
+  const otpRecord = await OTP.findOne({ otp });
+
+  if (!user || !otpRecord || otpRecord.otp !== otp || otpRecord.otpExpiry < Date.now()) {
+    return res.status(400).json({ message: 'Invalid or expired OTP' });
+  }
+
+  user.password = await bcrypt.hash(newPassword, 10);
+  otpRecord.isVerified = false; // Reset OTP verification
+  await otpRecord.save();
+  await user.save();
+
+  res.status(200).json({ message: 'Password reset successful' });
+},
+
+// Forgot password (generate OTP)
+async forgotPassword(req, res, next) {
+  const { email } = req.body;
+  const user = await User.findOne({ email });
+
+  if (!user) return res.status(404).json({ message: 'User not found' });
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otpExpiry = Date.now() + 10 * 60 * 1000; // OTP valid for 10 minutes
+
+  // Save OTP
+  const otpRecord = new OTP({
+    email,
+    otp,
+    otpExpiry,
+    isVerified: false,
+  });
+  await otpRecord.save();
+
+  await sendEmail(email, 'Reset Password OTP', `Your OTP to reset password is ${otp}`);
+
+  res.status(200).json({ message: 'OTP sent to your email.' });
+},
+  
   async getUserById(req, res, next) {
     try {
       const userId = req.params.id;

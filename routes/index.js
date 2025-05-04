@@ -2,13 +2,15 @@ const express = require('express');
 const authController = require('../controller/authController');
 const blogController = require('../controller/blogController');
 const commentController = require('../controller/commentController');
-const appointmentController = require('../controller/appointmentController');
 const  orderController = require('../controller/orderController');
 const locationController = require('../controller/locationController');
 const upload = require('../middlewares/multer');
 const auth = require('../middlewares/auth');
 const favController= require('../controller/addToFavController');
 const router = express.Router();
+const passport = require('passport');
+const { OAuth2Client } = require('google-auth-library');
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 router.get('/', (req, res) => {
     console.log("working");
     res.status(200).json({
@@ -18,6 +20,75 @@ router.get('/', (req, res) => {
 
 // user
 
+router.post('/request-otp',authController.requestOtp);
+
+// Google
+
+// —————— Flutter Google Sign-In (POST) ——————
+router.post('/google', async (req, res) => {
+  try {
+    const { idToken } = req.body; // From Flutter
+
+    // 1. Verify Google ID token
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+
+    // 2. Check if user exists (using email, not googleId)
+    let user = await User.findOne({ email: payload.email });
+    
+    if (!user) {
+      // 3. Create new user if not found
+      user = await User.create({
+        name: payload.name,
+        email: payload.email,
+        profileImage: payload.picture, // Google profile photo
+        isVerified: true,
+        role: 'buyer',
+      });
+    }
+
+    // 4. Generate JWT for Flutter
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    // 5. Send token + user data to Flutter
+    res.json({
+      success: true,
+      token,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        profileImage: user.profileImage,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+router.get('/google/callback',
+  passport.authenticate('google', { failureRedirect: '/login' }),
+  (req, res) => {
+    res.redirect('/dashboard'); // or send tokens
+  }
+);
+
+// Facebook
+router.get('/facebook', passport.authenticate('facebook', { scope: ['email'] }));
+router.get('/facebook/callback',
+  passport.authenticate('facebook', { failureRedirect: '/login' }),
+  (req, res) => {
+    res.redirect('/dashboard');
+  }
+);
+
 // register
 router.post('/register', authController.register);
 
@@ -25,7 +96,16 @@ router.post('/register', authController.register);
 router.post('/login', authController.login);
 
 // logout
-router.post('/logout', auth, authController.logout);
+// router.post('/logout', auth, authController.logout);
+// Verify OTP - Does not require authentication
+router.post('/verify-otp', authController.verifyOtp);
+
+// Forgot Password - Does not require authentication
+router.post('/forgot-password', authController.forgotPassword);
+
+// Reset Password - Does not require authentication
+router.post('/reset-password', authController.resetPassword);
+
 
 // get user by ID
 router.get('/users/:id', authController.getUserById);
@@ -122,12 +202,6 @@ router.delete('/blog/:id', blogController.delete);
 
 
 
-// appointments
-router.post('/appointments', auth, appointmentController.create);
-// router.get('/appointments/all', auth, appointmentController.getAll);
-router.get('/appointment/:tailorId', auth, appointmentController.getAll);
-
-
 //order
 // Create order
 router.post('/createOrder', orderController.createOrder);
@@ -147,13 +221,6 @@ router.get('/author/:authorId', orderController.getOrdersByAuthorId);
 //update status
 // Update order status by ID
 router.put('/update-status/:id', orderController.updateOrderStatus);
-
-
-// router.post('/appointment', appointmentController.create);
-// router.get('/appointments', appointmentController.getAll);
-// router.get('/appointment/:id', appointmentController.getById);
-// router.put('/appointment', appointmentController.update);
-// router.delete('/appointment/:id', appointmentController.delete);
 
 // comment
 // create 

@@ -4,7 +4,8 @@ const router = require("./routes/index");
 const errorHandler = require("./middlewares/errorHandler");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
-
+const passport = require("passport");
+require("./config/passport");
 const PORT = 3000;
 
 const corsOptions = {
@@ -20,6 +21,9 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: "50mb" }));
 
 app.use(router);
+
+app.use(passport.initialize());
+app.use(passport.session());
 
 dbConnect();
 

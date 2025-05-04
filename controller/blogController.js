@@ -17,7 +17,6 @@ const path = require('path');
 const { type } = require("os");
 const cloudinary = require("cloudinary").v2;
 const streamifier = require('streamifier');
-
 // Configuration
  cloudinary.config({ 
         cloud_name: 'dxxvqqcbd', 
@@ -96,33 +95,61 @@ console.log('no error ')
     return res.status(500).json({ error: 'Failed to save blog to database' });
   }
   },
-  async getByAuthor(req, res, next) {
-    console.log("getByAuthor called");
-
-  const getByAuthorSchema = Joi.object({
-    authorId: Joi.string().regex(mongodbIdPattern).required(),
-  });
-
-  const { error } = getByAuthorSchema.validate(req.params);
-
-  if (error) {
-    return next(error);
-  }
-
-  const { authorId } = req.params;
-
-  let blogs;
-
+async  getByAuthor(req, res) {
   try {
-    blogs = await Blog.find({ author: authorId }).populate("author", "name profileImage");
+    const authorId = req.params.authorId;
+
+    // Validate authorId
+    const { error } = Joi.object({
+      authorId: Joi.string().pattern(mongodbIdPattern).required()
+    }).validate({ authorId });
+
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid author ID format"
+      });
+    }
+
+    // Fetch blogs with populated authorDetails (excluding sensitive fields)
+    const blogs = await Blog.find({ author: authorId })
+      .populate({
+        path: 'authorDetails',
+        select: '-password -__v'
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!blogs.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No blogs found for this author"
+      });
+    }
+
+    // Restructure blogs to include author data in a cleaner way
+    const response = blogs.map(blog => {
+      const { authorDetails, ...rest } = blog;
+      return {
+        ...rest,
+        author: authorDetails
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: response.length,
+      blogs: response
+    });
+
   } catch (err) {
-    return next(err);
+    console.error("Error fetching blogs by author:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching blogs"
+    });
   }
-
-  const blogDtos = blogs.map((blog) => new BlogDTO(blog)); // Match structure with getAll
-
-  return res.status(200).json({ blogs: blogDtos });
-  },
+},
   async searchByName(req, res, next) { 
     const title = req.query.title;
   try {
